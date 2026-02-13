@@ -1,0 +1,7 @@
+celery[redis]>=5.4.0
+pydantic-settings>=2.6.0
+psycopg2-binary>=2.9.0
+# pypff / libpff-python is OPTIONAL (PST best-effort).
+# Requires libpff compiled from source — see README §PST Conversion.
+# Uncomment the line below if you have a pre-built libpff wheel:
+# libpff-python
