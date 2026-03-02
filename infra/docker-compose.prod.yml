@@ -1,0 +1,119 @@
+---
+# Production / Unraid Compose File
+# Usage: docker compose -f infra/docker-compose.prod.yml up -d
+
+networks:
+  mailknowledge:
+    driver: bridge
+
+services:
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ${UNRAID_APPDATA}/postgres:/var/lib/postgresql/data
+    networks:
+      - mailknowledge
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - ${UNRAID_APPDATA}/redis:/data
+    networks:
+      - mailknowledge
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend ───────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      UPLOADS_DIR: ${UPLOADS_DIR}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      EMBEDDING_DIM: ${EMBEDDING_DIM}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: "false"
+    volumes:
+      - ${UNRAID_APPDATA}/uploads:/uploads
+    networks:
+      - mailknowledge
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── Worker ────────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      UPLOADS_DIR: ${UPLOADS_DIR}
+      OLLAMA_HOST: ${OLLAMA_HOST}
+      EMBEDDING_DIM: ${EMBEDDING_DIM}
+    volumes:
+      - ${UNRAID_APPDATA}/uploads:/uploads
+    networks:
+      - mailknowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    networks:
+      - mailknowledge
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

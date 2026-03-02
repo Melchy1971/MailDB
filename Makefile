@@ -1,47 +1,41 @@
-.PHONY: up down build rebuild logs ps \
-        migrate migrate-new \
-        shell-backend shell-worker shell-db \
-        frontend-install
+.PHONY: dev-up dev-down dev-logs prod-up prod-down \
+        migrate migrate-new seed \
+        shell-backend shell-worker shell-db
 
-COMPOSE = docker compose -f infra/docker-compose.yml
+# ── Dev Utils ─────────────────────────────────────────────────────────────────
+dev-up:
+	docker compose -f infra/docker-compose.dev.yml up --build -d
 
-# ── Compose lifecycle ─────────────────────────────────────────────────────────
-up:
-	$(COMPOSE) up -d
+dev-down:
+	docker compose -f infra/docker-compose.dev.yml down
 
-down:
-	$(COMPOSE) down
+dev-logs:
+	docker compose -f infra/docker-compose.dev.yml logs -f
 
-build:
-	$(COMPOSE) build
+# ── Prod Utils ────────────────────────────────────────────────────────────────
+prod-up:
+	docker compose -f infra/docker-compose.prod.yml up -d --build
 
-rebuild:
-	$(COMPOSE) build --no-cache
+prod-down:
+	docker compose -f infra/docker-compose.prod.yml down
 
-logs:
-	$(COMPOSE) logs -f
-
-ps:
-	$(COMPOSE) ps
-
-# ── Database migrations ───────────────────────────────────────────────────────
+# ── DB Utils ──────────────────────────────────────────────────────────────────
 migrate:
-	$(COMPOSE) exec backend alembic upgrade head
+	docker compose -f infra/docker-compose.dev.yml exec backend alembic upgrade head
 
 migrate-new:
 	@test -n "$(msg)" || (echo "Usage: make migrate-new msg='describe change'" && exit 1)
-	$(COMPOSE) exec backend alembic revision --autogenerate -m "$(msg)"
+	docker compose -f infra/docker-compose.dev.yml exec backend alembic revision --autogenerate -m "$(msg)"
 
-# ── Shells ────────────────────────────────────────────────────────────────────
+seed:
+	# Add seed script or command here if available
+	@echo "Seeding not implemented yet"
+
 shell-backend:
-	$(COMPOSE) exec backend bash
+	docker compose -f infra/docker-compose.dev.yml exec backend bash
 
 shell-worker:
-	$(COMPOSE) exec worker bash
+	docker compose -f infra/docker-compose.dev.yml exec worker bash
 
 shell-db:
-	$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-mail} $${POSTGRES_DB:-mailknowledge}
-
-# ── Frontend local dev ────────────────────────────────────────────────────────
-frontend-install:
-	cd frontend && npm install
+	docker compose -f infra/docker-compose.dev.yml exec postgres psql -U $${POSTGRES_USER:-mail} $${POSTGRES_DB:-mailknowledge}

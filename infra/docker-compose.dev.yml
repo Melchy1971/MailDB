@@ -1,0 +1,124 @@
+---
+# Development Compose File
+# Usage: docker compose -f docker-compose.dev.yml up --build
+
+volumes:
+  postgres_data:
+  uploads_data:
+  redis_data:
+
+networks:
+  mailknowledge:
+    driver: bridge
+
+services:
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-mail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB:       ${POSTGRES_DB:-mailknowledge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mailknowledge
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mail} -d ${POSTGRES_DB:-mailknowledge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - mailknowledge
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend ───────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL:  ${DATABASE_URL:-postgresql+asyncpg://mail:change-me@postgres:5432/mailknowledge}
+      REDIS_URL:     ${REDIS_URL:-redis://redis:6379/0}
+      UPLOADS_DIR:   ${UPLOADS_DIR:-/uploads}
+      OLLAMA_HOST:   ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      SECRET_KEY:    ${SECRET_KEY:-dev-secret}
+      DEBUG:         "true"
+    volumes:
+      - ../backend:/app
+      - uploads_data:/uploads
+    networks:
+      - mailknowledge
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Worker ────────────────────────────────────────────────────────────────
+  worker:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Reloading celery is tricky; we mount code for quick restarts but don't auto-reload
+    command: celery -A app.celery_app worker -l info
+    environment:
+      DATABASE_URL:  ${DATABASE_URL:-postgresql+asyncpg://mail:change-me@postgres:5432/mailknowledge}
+      REDIS_URL:     ${REDIS_URL:-redis://redis:6379/0}
+      UPLOADS_DIR:   ${UPLOADS_DIR:-/uploads}
+      OLLAMA_HOST:   ${OLLAMA_HOST:-http://host.docker.internal:11434}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+    volumes:
+      - ../worker:/app
+      - uploads_data:/uploads
+    networks:
+      - mailknowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    # Use a raw node image for dev to avoid multi-stage build complexity
+    image: node:22-alpine
+    working_dir: /app
+    restart: unless-stopped
+    # Install if missing, then dev
+    command: sh -c "if [ ! -d node_modules ]; then npm install; fi && npm run dev"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      WATCHPACK_POLLING: "true" # Better for Windows/WSL mounts
+    volumes:
+      - ../frontend:/app
+    networks:
+      - mailknowledge
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_started
